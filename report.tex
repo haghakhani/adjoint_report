@@ -7,6 +7,44 @@
 \usepackage{yfonts}
 \usepackage{mathrsfs}
 \usepackage{natbib}
+\usepackage{listings}
+\usepackage{lipsum}
+
+\usepackage{color}
+
+\definecolor{mygreen}{rgb}{0,0.6,0}
+\definecolor{mygray}{rgb}{0.5,0.5,0.5}
+\definecolor{mymauve}{rgb}{0.58,0,0.82}
+
+\lstset{ %
+  backgroundcolor=\color{white},   % choose the background color; you must add \usepackage{color} or \usepackage{xcolor}
+  basicstyle=\footnotesize,        % the size of the fonts that are used for the code
+  breakatwhitespace=false,         % sets if automatic breaks should only happen at whitespace
+  breaklines=true,                 % sets automatic line breaking
+  captionpos=b,                    % sets the caption-position to bottom
+  commentstyle=\color{mygreen},    % comment style
+  deletekeywords={...},            % if you want to delete keywords from the given language
+  escapeinside={\%*}{*)},          % if you want to add LaTeX within your code
+  extendedchars=true,              % lets you use non-ASCII characters; for 8-bits encodings only, does not work with UTF-8
+  frame=single,                    % adds a frame around the code
+  keepspaces=true,                 % keeps spaces in text, useful for keeping indentation of code (possibly needs columns=flexible)
+  keywordstyle=\color{blue},       % keyword style
+  language=Octave,                 % the language of the code
+  otherkeywords={*,...},            % if you want to add more keywords to the set
+  numbers=left,                    % where to put the line-numbers; possible values are (none, left, right)
+  numbersep=5pt,                   % how far the line-numbers are from the code
+  numberstyle=\tiny\color{mygray}, % the style that is used for the line-numbers
+  rulecolor=\color{black},         % if not set, the frame-color may be changed on line-breaks within not-black text (e.g. comments (green here))
+  showspaces=false,                % show spaces everywhere adding particular underscores; it overrides 'showstringspaces'
+  showstringspaces=false,          % underline spaces within strings only
+  showtabs=false,                  % show tabs within strings adding particular underscores
+  stepnumber=2,                    % the step between two line-numbers. If it's 1, each line will be numbered
+  stringstyle=\color{mymauve},     % string literal style
+  tabsize=2,                       % sets default tabsize to 2 spaces
+  title=\lstname                   % show the filename of files included with \lstinputlisting; also try caption instead of title
+}
+
+
 
 \setlength\parindent{0pt}
 \setcounter{section}{0}
@@ -19,10 +57,12 @@
 
 \begin{document}
 \maketitle
+\tableofcontents
 % 
 % \begin{abstract}
 % 
 % \end{abstract}
+\newpage
 
 The aim of this report is to briefly show how the discrete adjoint for the system of Savage\_Hutter partial differential equations 
 is computed. 
@@ -174,7 +214,7 @@ The previous equation means that to compute the Jacobian matrices, the solution 
  and appropriate parallel I/O to overcome these difficulties.
 \section{Error Estimation}
 
-Suppose that $ J(Q) $, $ J(Q_h) $ and $ J(Q_H) $ are respectively exact value, numerical value on fine mesh, and numerical value on a coarse mesh of objective functional. We want to minimize the numerical error of objective functional $ |J(Q) - J(Q_H)| $. Following the steps described in \cite{nemec} we can write:
+Suppose that $ J(Q) $, $ J(Q_h) $ and $ J(Q_H) $ are respectively exact value, numerical value on fine mesh, and numerical value on a coarse mesh of objective functional. We want to minimize the numerical error of objective functional $ |J(Q) - J(Q_H)| $. Following the steps described in \cite{Nemec2008} we can write:
 
 \[
 J(Q_h) \approx  J(Q^H_h) - \underbrace{(\psi^H_h)^T R(Q^H_h)}_\text{Adjoint correction term} - 
@@ -206,15 +246,2007 @@ Given a threshold for the functional, TOL, so the local error parameter is going
 \end{equation} 
 
 \section{Computer Programming}
+\subsection{General algorithm}
+
+As discussed above in the theroy section, there are two important data that we need to compute discrete adjoint for TITAN2D, or possibly any other code that uses Euler explicit, which are the functional sensitivity with respect to the particular element at specific time step and the jacobian matrix. We can compute the functional sensitivity in forward run, it is also possible to compute the jacobian in forward run, but it is not a good idea. Because in that can one has to store all jacobians for all time steps. Instead of this, we can just store the solution and compute the jacobian, matrix in reverse run whenever we want. This strategy not only helps to avoid storing all jacobian matrices, but also allows to just have one jacobian matrix and clear it after computing the compounding adjoint vector. Moreover storing solution requires very very less required memory instead of storing Jacobian matrices.
+In the next part we discuss about the data structures that we create to compute Jacobain, and here we just talk about the general algorithm. \newline
+
+Given the required data to compute the adjoint the general algorithm is as follows. At the end of forward run dual\_solver function is called in hpfem and inside the main function. This function calls the other functions we need to compute the adjoint. As showed before for the last time step of forward run or first time step of reveres run we do not need to compute Jacbian and the adjoint vector is simply the functional sensitivity. As also discussed in detail in theory section, beside adjoint computation we also compute the dual weighted error. To compute the error, we first uniformly refine compute the residual, then uniformly unrefine to get back the original grid and then compute the error given the adjoint solution and obtained residual from this procedure. This method is also applied for all time steps, and here we will not explain in further. 
+
+For computing the adjoint for the next steps a new loop starts. Inside of this loop we first we reverse the state variables. This means that the state variables change with respect to the time step that we want to compute the adjoint. The we call setup\_geoflow function that computes the gravity derivative of gravity and calculates the other required topographic based on the replaced state variables. Next step is to compute the jacobian. Jacobian is simply the sensitivity of the residual with respect to state variables. Since in discrete form the residual of an element depends also to state variables of the neighbor element, we need also to compute the sensitivity of the residual vector of each element with respect to all neighbors that may affect it, and for state variables of the element itself. To compute the jacobian we use forward difference. The general idea is to compute each component we perturb the corresponding state variables and find the change in the residual vector the simply use the definition of the derivative to compute the jacobian. The perturbation that we used in this study is flexible and can be changed, but we mostly tried with $1E-08$, and obtained very good results.
+After perturbing any state variable, fluxes and slopes are updated and residual function is called to compute the change in residual and compute the jacoboian from equation \ref{jacobian_for}. It is important to return everything back to before the perturbing the state varibles, otherwise it will affect the other computations.\newline
+\begin{equation}\label{jacobian_for}
+jac_{i,j}=\frac{R_i(u_j+h)-R_i(u_j)}{h}
+\end{equation}
+
+\begin{equation}\label{jacobian_cent_for}
+jac_{i,j}=\frac{1}{2}(
+\frac{R_i(u_j+h)-R_i(u_j)}{h}+
+\frac{R_i(u_j)-R_i(u_j-h)}{h})
+\end{equation}
+%
+Our experienced showed that for some of the element just forward difference is not enough accurate to compute the jacobian and more accurate scheme is required. For these cases we used central difference scheme. To do that, after computing forward difference we compute backward difference and then compute the average of them to find the central difference derivative (equation \ref{jacobian_cent_for}).\newline
+For element that are located in the boundary the jacobian is zero because regardless of any change on state variables of themselves or their neighbors their value is fix and does not change.\newline
+After computing the jacobian for all of the elements, we can now compute the adjoint by calling calc\_adjoint function. Then we compute the residual and dual weighted error as we discussed earlier, and go to the next iteration in the loop until we reach the first step of the forward run, or the last step of the reverse run, and during this loop we can call tecplot function to report the results into an ascii file.
+
+
+\subsection{Data structures without AMR}
 For sake of simplicity and for the first phase We implemented the above computations without Adaptive Mesh Refinement (AMR). 
-To store the solutions we created Jacobian class that stores the all required information including the vector of solutions.
-We also created a vector in Element class that keeps the address of Jacobian class. So Jacobian class is created at each time step for each element, 
-stores the solution vector and its address is maintained in the corresponding element. The reason that we did not used the same element class for storing 
-the data is that in forward run we do not need the solutions and if we do that we have to pay a huge not necessary communication cost. 
-With this method at the end of forward run we have the address of all the data that we need to compute the adjoint, and we just have 
-to retrieve them from the memory to compute the jacobian. In the reverse mode, after using the required data of the jacobian class we will not need them anymore 
-and we can free memory from them.
-     
+For computing the adjoint vector, we created two new Jacobian  and Solution classes. 
+Solution class stores the all required information for computing adjoint in reverse run including the vector of solutions. Jacobian class is a data frame that we need to compute the adjoint in reverse run. More clearly, in forward run at each time step and for each element we create a new solution object to store the solution vector and sensitivity of the functional of interest with respect to the current solution for the specific element. To access to this solution object, we create a vector of solution pointers inside the jacobian class that holds the address of this object. The Jacobian class that is created for each element once, also holds the jacobian matrix of this element. In without refinement code, grid is fix, so each element has always four neighbors. As mentioned before the Jacobian matrix of whole problem is a block bounded matrix which size of this block depends on stencil that we use to compute the residual vector. In TITAN2D, we use central difference scheme to compute the derivatives and HLL to compute the fluxes, so the residual vector of each element only depends on its four neighbor elements and element itself. Consequently, In Jacobian class we create a 3D matrix with size of $5\times3\times3$. First index in this matrix shows neighbor number, second index shows the residual vector and third index shows the state variable that this component of Jacobian matrix is computed. We numbered the neighbor elements in following format. Neighbor element in positive x side is 1, in positive y side is 2, in negative x side is 3, in negative y side is 4, and for element itself is 0. The order of residual vector and state variables are same as other parts of code. For example, the component of Jacobian matrix related to effect of x momentum of the negative y neighbor element on the residual of y momentum is equal to jacobian[4][2][1], because the neighbor  number is 4, residual is 3rd component of residual vector so base on C numbering that starts from zero its number is 2, and the state variable number is 1 because it is the 2nd component of state variables.\newline
+To allocate the memory as lowest as possible, we allocate the memory for the jacobian matrix inside the jacobian class exactly when we want it in reverse run, so with this manner we not only keep the jacobian of the whole problem in a matrix free fashion, but also allocate the memory when we need it not at the start of the simulation. With this strategy we will have much more space to store the solution and avoid writing the solution history to disk. In addition to the jacobian matrix and vector of pointers of solution history, we have the required methods in Jacobian class to access to the solution and also the functional sensitivity. These methods are used in reverse run to compute the adjoint. Other data and methods of Solution and Jacobian class can be find in the appendix section.
+
+
+\subsection{Data structures with AMR}   
+\newpage
+\appendix
+\section*{Appendices}\label{appendix}
+\addcontentsline{toc}{section}{Appendices}
+\renewcommand{\thesubsection}{\Alph{subsection}}
+
+\subsection{Solution class}
+\subsubsection{Solution header}
+\begin{lstlisting}
+class Solution {
+
+public:
+
+	Solution(double* curr_sol, double kactxy, double* funcsensitivity);
+
+	double* get_solution(void);
+
+	double get_kact(void);
+
+	double* get_funcsens(void);
+
+	~Solution();
+
+protected:
+
+	double funcsens[NUM_STATE_VARS]; //this variable keeps the value of sensitivity at each time step for this element.
+	double states[NUM_STATE_VARS]; //to save the solution
+	double kact; //to save kact
+
+};
+\end{lstlisting}
+\subsubsection{Solution source}
+\begin{lstlisting}
+Solution::Solution(double* curr_sol, double kactxy, double* funcsensitivity) {
+
+	for (int i = 0; i < NUM_STATE_VARS; ++i)
+		states[i] = curr_sol[i];
+
+	kact = kactxy;
+
+	for (int i = 0; i < NUM_STATE_VARS; ++i)
+		funcsens[i] = funcsensitivity[i];
+}
+double* Solution::get_solution() {
+	return states;
+}
+
+double Solution::get_kact() {
+	return kact;
+}
+
+double* Solution::get_funcsens() {
+	return (funcsens);
+}
+Solution::~Solution() {
+
+}
+\end{lstlisting}
+\subsection{Jacobian class}
+\subsubsection{Jacobian header}
+\begin{lstlisting}
+class Jacobian {
+	//friend functions and classes
+
+public:
+
+	//constructors
+	Jacobian(unsigned* key, double* position);
+
+	void set_jacobian(int neigh_num, double elemjacob[3], int state_vars_num, const double incr);
+
+	// this function sets the jacobian for a boundary element
+	void set_jacobian();
+
+	void print_jacobian(int iter);
+
+	double*** get_jacobian(void);
+
+	double* get_solution(void);
+
+	double* get_kact(void);
+
+	void new_jacobianMat(void);
+
+	double* get_funcsens(int iter);
+
+	void put_solution(Solution* sol);
+
+	virtual void rev_state_vars(void* element, int iter);
+
+	void set_jacobianMat_zero(int jacmatind);
+
+	void add_state_func_sens(double* func_sens_prev, int iter);
+
+	void del_jacobianMat();
+
+	double* get_position();
+
+	unsigned* get_key();
+
+	//destructor
+	virtual ~Jacobian();
+
+	//members
+protected:
+
+	vector<Solution*> solvector;
+	unsigned key[DIMENSION];
+	double position[DIMENSION];
+	double ***jacobianMat; //double jacobianMat [5][3][3],self[3][3],neigh1[3][3],neigh2[3][3],neigh3[3][3],neigh4[3][3]
+
+};
+
+\end{lstlisting}
+\subsubsection{Jacobian source}
+\begin{lstlisting}
+Jacobian::Jacobian(unsigned* key, double* position) {
+	for (int i = 0; i < 2; ++i) {
+		Jacobian::key[i] = key[i];
+		Jacobian::position[i] = position[i];
+	}
+
+	jacobianMat = NULL;
+}
+
+void Jacobian::new_jacobianMat() //in forward run we just save the solution and in backward run we compute the jacobian
+{
+	int i, j, k;
+	jacobianMat = new double**[5];
+	for (i = 0; i < 5; i++) {
+		jacobianMat[i] = new double*[3];
+		for (j = 0; j < 3; j++)
+			jacobianMat[i][j] = new double[3];
+	}
+
+	for (i = 0; i < 5; i++)
+		for (j = 0; j < 3; j++)
+			for (k = 0; k < 3; k++)
+				jacobianMat[i][j][k] = 0.0;
+
+	return;
+}
+
+double* Jacobian::get_position() {
+	return position;
+}
+
+void Jacobian::del_jacobianMat() {
+
+	if (jacobianMat != NULL) {
+
+		for (int i = 0; i < 5; ++i) {
+			for (int j = 0; j < 3; ++j)
+				delete[] jacobianMat[i][j];
+
+			delete[] jacobianMat[i];
+		}
+		delete[] jacobianMat;
+	}
+
+}
+
+void Jacobian::set_jacobian(int neigh_num, double elemjacob[3], int state_vars_num,
+    const double incr) {
+
+	int i, j;
+
+	if (state_vars_num < 1) //since state_vars=1 is for first component of adjoint
+		i = state_vars_num;
+	else
+		i = state_vars_num - 1;
+
+	for (j = 0; j < 3; j++)
+		jacobianMat[neigh_num][i][j] = elemjacob[j] / incr;
+
+	return;
+}
+
+void Jacobian::set_jacobian() {
+
+	for (int i = 0; i < 5; i++)
+		for (int j = 3; j < 3; j++)
+			for (int k = 0; k < 3; k++)
+				jacobianMat[i][j][k] = 0.0;
+
+	return;
+}
+
+double*** Jacobian::get_jacobian() {
+	return jacobianMat;
+}
+
+void Jacobian::print_jacobian(int iter) {
+
+	cout << "iter:  " << iter << '\n';
+	cout << "key1:  " << key[0] << "  key2:  " << key[1] << '\n';
+	cout << "X:  " << position[0] << "  Y:  " << position[1] << '\n';
+	cout << "Jacobian: " << '\n';
+	//cout << "self"<<"
+	for (int i = 0; i < 5; i++) {
+		cout << "Matrix=  " << i << "," << '\n';
+
+		for (int j = 0; j < 3; j++) {
+			for (int k = 0; k < 3; k++) {
+				cout << scientific << setw(10) << setprecision(8) << jacobianMat[i][j][k] << "  ";
+				if (dabs(jacobianMat[i][j][k]) > 10.)
+					cout << "Jedi begir mano" << endl;
+			}
+			cout << '\n';
+		}
+	}
+	return;
+}
+
+void Jacobian::put_solution(Solution* sol) {
+	solvector.push_back(sol);
+
+	return;
+}
+
+void Jacobian::rev_state_vars(void* elementin, int iter) {
+
+	double *state_vars, *prev_state_vars, *kactxy;
+	Element* element;
+	element = (Element*) elementin;
+
+	state_vars = element->get_state_vars();
+	prev_state_vars = element->get_prev_state_vars();
+	kactxy = element->get_kactxy();
+
+	for (int i = 0; i < NUM_STATE_VARS; i++)
+		state_vars[i] = *((solvector.at(iter))->get_solution() + i);
+
+	for (int i = 0; i < NUM_STATE_VARS; i++)
+		prev_state_vars[i] = *((solvector.at(iter - 1))->get_solution() + i);
+
+	*kactxy = (solvector.at(iter))->get_kact();
+
+	for (int i = 0; i < 3; ++i)
+		prev_state_vars[6 + i] = state_vars[6 + i];
+
+	return;
+}
+
+double* Jacobian::get_funcsens(int iter) {
+	return (solvector.at(iter)->get_funcsens());
+}
+
+void Jacobian::set_jacobianMat_zero(int jacmatind) {
+
+	for (int j = 0; j < 3; j++)
+		for (int k = 0; k < 3; k++)
+			jacobianMat[jacmatind][j][k] = 0.0;
+
+	return;
+}
+
+void Jacobian::add_state_func_sens(double* func_sens_prev, int iter) {
+
+	for (int ind = 0; ind < 3; ind++)
+		*(get_funcsens(iter) + ind) += func_sens_prev[ind];
+
+	return;
+}
+
+unsigned* Jacobian::get_key() {
+	return key;
+}
+
+Jacobian::~Jacobian() {
+
+	del_jacobianMat();
+
+	vector<Solution*>::iterator it;
+	for (it = solvector.begin(); it != solvector.end(); ++it)
+		delete (*it);
+
+	solvector.clear();
+
+}
+
+\end{lstlisting}
+\subsection{Some of the most important functions for computing adjoint}
+\subsubsection{dual\_solver.C}
+\begin{lstlisting}
+
+#ifdef HAVE_CONFIG_H
+# include <config.h>
+#endif
+#include "../header/hpfem.h"
+
+#define DEBUG1
+
+#define KEY0    3777862041
+#define KEY1    2576980374
+#define EFFELL  0
+#define ITER    187
+#define J       0
+
+void dual_solver(HashTable* El_Table, HashTable* NodeTable,
+		vector<Jacobian*>* solHyst, MatProps* matprops_ptr,
+		TimeProps* timeprops_ptr, MapNames *mapname_ptr, PertElemInfo* eleminfo) {
+
+	int myid, numprocs;
+	MPI_Comm_rank(MPI_COMM_WORLD, &myid);
+	MPI_Comm_size(MPI_COMM_WORLD, &numprocs);
+
+	const int rescomp = 1;
+	const double increment = INCREMENT;
+	const int maxiter = timeprops_ptr->iter;
+
+//	// here we do this because iter in timeprops is such that it is one iter more than
+//	// actual iteration at the end of forward run, so we have to correct that.
+//	timeprops_ptr->iter = timeprops_ptr->maxiter;
+
+	double functional = 0.0, dt;
+
+	int adjiter = 0;
+
+	int hrs, mins;
+	double secs;
+
+	allocJacoMat(*solHyst); //this function allocates memory to store Jacobian matrices
+	//int unsigned key[2] = { KEY0, KEY1 };
+
+	calc_adjoint(El_Table, solHyst, maxiter, adjiter, myid);
+
+	uinform_refine(El_Table, NodeTable, timeprops_ptr, matprops_ptr, numprocs,
+			myid);
+
+	error_compute(El_Table, NodeTable, timeprops_ptr, matprops_ptr, maxiter, myid,
+			numprocs);
+
+	double UNREFINE_TARGET = .01;	//dummy value is not used in the function
+	unrefine(El_Table, NodeTable, UNREFINE_TARGET, myid, numprocs, timeprops_ptr,
+			matprops_ptr, rescomp);
+
+	int tecflag = 2;
+	tecplotter(El_Table, NodeTable, matprops_ptr, timeprops_ptr, mapname_ptr,
+			functional, tecflag);
+
+	tecflag = 1;
+
+	for (int iter = maxiter; iter > 0; --iter) {
+
+		timeprops_ptr->iter = iter;
+		dt = timeprops_ptr->dt.at(iter - 1);
+		adjiter++;
+
+		// we need this even for  iter = maxiter because after refine and unrefine
+		// the state variables are not same as forward run
+		reverse_states(El_Table, solHyst, iter);
+
+		timeprops_ptr->adjoint_time(iter - 1);
+
+		setup_geoflow(El_Table, NodeTable, myid, numprocs, matprops_ptr,
+				timeprops_ptr);
+
+		compute_functional(El_Table, &functional, timeprops_ptr);
+		eleminfo->update_dual_func(functional);
+
+		calc_jacobian(El_Table, NodeTable, solHyst, matprops_ptr, timeprops_ptr,
+				mapname_ptr, increment);
+
+//		print_jacobian(El_Table, solHyst, iter);
+
+		calc_adjoint(El_Table, solHyst, iter, adjiter, myid);
+
+		if (eleminfo->iter == iter - 1)
+			fill_pertelem_info(El_Table, solHyst, eleminfo);
+
+		//for first adjoint iteration there is no need to compute Jacobian and adjoint can be computed from the functional
+		//sensitivity w.r.t to parameters
+
+		uinform_refine(El_Table, NodeTable, timeprops_ptr, matprops_ptr, numprocs,
+				myid);
+
+		error_compute(El_Table, NodeTable, timeprops_ptr, matprops_ptr, iter, myid,
+				numprocs);
+
+		// in dual weighted error estimation if solver performs n step, we'll have n+1
+		// solution and n+1 adjoint solution, but we'll have just n residual and as a
+		// result n error estimate. The point is that at initial step (0'th step),
+		// we know the solution from initial condition  so the error of 0th step is zero,
+		// and we have to compute the error for other time steps.
+
+		double UNREFINE_TARGET = .01;	//dummy value is not used in the function
+		unrefine(El_Table, NodeTable, UNREFINE_TARGET, myid, numprocs,
+				timeprops_ptr, matprops_ptr, rescomp);
+
+		if (/*adjiter*/timeprops_ptr->ifadjoint_out() /*|| adjiter == 1*/)
+			tecplotter(El_Table, NodeTable, matprops_ptr, timeprops_ptr, mapname_ptr,
+					functional, tecflag);
+
+	}
+
+	return;
+}
+
+int num_nonzero_elem(HashTable *El_Table) {
+	int num = 0;			//myid
+	HashEntryPtr currentPtr;
+	Element *Curr_El;
+	HashEntryPtr *buck = El_Table->getbucketptr();
+
+	for (int i = 0; i < El_Table->get_no_of_buckets(); i++)
+		if (*(buck + i)) {
+			currentPtr = *(buck + i);
+			while (currentPtr) {
+				Curr_El = (Element*) (currentPtr->value);
+				if (Curr_El->get_adapted_flag() > 0)
+					num++;
+				currentPtr = currentPtr->next;
+			}
+		}
+
+	return (num);
+}
+
+void initSolRec(HashTable* El_Table, HashTable* NodeTable,
+		vector<Jacobian*> *solHyst, TimeProps* timeprops_ptr, int myid) {
+
+	HashEntryPtr* buck = El_Table->getbucketptr();
+	HashEntryPtr currentPtr;
+	Element* Curr_El;
+	Jacobian* jacobian;
+	double functionalsens[3] = { 0., 0., 0. };
+	int num = 0;
+
+	solHyst->reserve(num_nonzero_elem(El_Table));
+
+	for (int i = 0; i < El_Table->get_no_of_buckets(); i++) { // this part allocate memory and initialize jacobian matrices inside the corresponding Jacobian
+		if (*(buck + i)) {
+			currentPtr = *(buck + i);
+			while (currentPtr) {
+				Curr_El = (Element*) (currentPtr->value);
+				if (Curr_El->get_adapted_flag() > 0) {
+
+					jacobian = new Jacobian(myid, Curr_El->pass_key(),
+							Curr_El->get_coord());
+					// at time step 0 we do not compute functional sensitivity,
+					// we compute the contribution of this time step n functional sensitivity on time step 1
+//					compute_funcsens(Curr_El, timeprops_ptr, functionalsens);
+					Solution *solution = new Solution(Curr_El->get_state_vars(),
+							Curr_El->get_kactxy(), functionalsens);
+					Curr_El->put_sol_rec_ind(num);
+					jacobian->put_solution(solution);
+					solHyst->push_back(jacobian);
+					num++;
+
+				}
+				currentPtr = currentPtr->next;
+			}
+		}
+	}
+	return;
+}
+
+void allocJacoMat(vector<Jacobian*> solHyst) {
+
+	vector<Jacobian*>::iterator it;
+	for (it = solHyst.begin(); it != solHyst.end(); ++it)
+		(*it)->new_jacobianMat();
+
+	return;
+}
+
+double tiny_sgn(double num, double tiny) {
+	if (dabs(num) < tiny)
+		return 0.;
+	else if (num > tiny)
+		return 1.;
+	else
+		return -1.;
+}
+
+void orgSourceSgn(Element* Curr_El, double frictiny, double* orgSgn) {
+
+	double* d_state_vars_x = Curr_El->get_d_state_vars();
+	double* d_state_vars_y = d_state_vars_x + NUM_STATE_VARS;
+	double* prev_state_vars = Curr_El->get_prev_state_vars();
+	double h_inv;
+	double tmp = 0.0;
+	double velocity[2];
+	for (int i = 0; i < 2; i++)
+		orgSgn[i] = 0.0;
+
+	if (prev_state_vars[0] > GEOFLOW_TINY) {
+
+		velocity[0] = prev_state_vars[2] / prev_state_vars[0];
+		velocity[1] = prev_state_vars[3] / prev_state_vars[0];
+
+	} else {
+		for (int k = 0; k < DIMENSION; k++)
+			velocity[k] = 0.;
+	}
+
+	if (prev_state_vars[0] > 0.0)
+		h_inv = 1. / prev_state_vars[0];
+
+	tmp = h_inv * (d_state_vars_y[2] - velocity[0] * d_state_vars_y[0]);
+	orgSgn[0] = tiny_sgn(tmp, frictiny);
+
+	tmp = h_inv * (d_state_vars_x[3] - velocity[1] * d_state_vars_x[0]);
+	orgSgn[1] = tiny_sgn(tmp, frictiny);
+
+	return;
+}
+
+
+int num_nonzero_elem(HashTable *El_Table, int type) {
+	int num = 0;
+	HashEntryPtr currentPtr;
+	Element *Curr_El;
+	HashEntryPtr *buck = El_Table->getbucketptr();
+
+	for (int i = 0; i < El_Table->get_no_of_buckets(); i++)
+		if (*(buck + i)) {
+			currentPtr = *(buck + i);
+			while (currentPtr) {
+				Curr_El = (Element*) (currentPtr->value);
+				if (Curr_El->get_adapted_flag() == type)
+					num++;
+				currentPtr = currentPtr->next;
+			}
+		}
+
+	return (num);
+}
+
+void reverse_states(HashTable* El_Table, vector<Jacobian*>* solHyst, int iter) {
+	HashEntryPtr currentPtr;
+	Element *Curr_El;
+	HashEntryPtr *buck = El_Table->getbucketptr();
+
+#ifdef DEBUG
+	if (checkElement(El_Table))
+	exit(22);
+	for (int i = 0; i < nonz1; i++) {
+		dbgvec[i] = 0;
+		pass[i] = 0;
+	}
+	for (int i = 0; i < El_Table->get_no_of_buckets(); i++) {
+		if (*(buck + i)) {
+			currentPtr = *(buck + i);
+			while (currentPtr) {
+				Curr_El = (Element*) (currentPtr->value);
+				currentPtr = currentPtr->next;
+				if (Curr_El->get_adapted_flag() > 0) {
+
+					int index = Curr_El->get_sol_rec_ind();
+					dbgvec[index] += 1;
+					pass[index] = 1;
+
+				}
+			}
+		}
+	}
+	for (int i = 0; i < nonz1; i++) {
+		if (dbgvec[i] != 1) {
+			cout << "these elements have problem:   " << i << endl
+			<< "the value is  " << dbgvec[i] << endl;
+			exit(EXIT_FAILURE);
+
+		} else if (pass[i] != 1) {
+			cout << "this index has not been passed  " << i << endl;
+			exit(EXIT_FAILURE);
+
+		}
+	}
+
+	delete[] dbgvec;
+
+	cout << "number of elements after unrefinement"
+	<< num_nonzero_elem(El_Table) << endl;
+//		getchar();
+	if (checkElement(El_Table))
+	exit(22);
+#endif
+
+	for (int i = 0; i < El_Table->get_no_of_buckets(); i++) {
+		if (*(buck + i)) {
+			currentPtr = *(buck + i);
+			while (currentPtr) {
+				Curr_El = (Element*) (currentPtr->value);
+				if (Curr_El->get_adapted_flag() > 0) {
+					Jacobian *jacobian = solHyst->at(Curr_El->get_sol_rec_ind());
+
+					if (iter != 0)
+						jacobian->rev_state_vars(Curr_El, iter);
+
+				}
+				currentPtr = currentPtr->next;
+			}
+		}
+	}
+
+	return;
+}
+
+void print_jacobian(HashTable* El_Table, vector<Jacobian*>* solHyst, int iter) {
+
+	HashEntryPtr currentPtr;
+	Element *Curr_El;
+	HashEntryPtr *buck = El_Table->getbucketptr();
+
+	for (int i = 0; i < El_Table->get_no_of_buckets(); i++) {
+		if (*(buck + i)) {
+			currentPtr = *(buck + i);
+			while (currentPtr) {
+				Curr_El = (Element*) (currentPtr->value);
+				if (Curr_El->get_adapted_flag() > 0) {
+					Jacobian *jacobian = solHyst->at(Curr_El->get_sol_rec_ind());
+					jacobian->print_jacobian(iter);
+				}
+				currentPtr = currentPtr->next;
+			}
+		}
+	}
+	return;
+}
+
+void compute_functional(HashTable* El_Table, double* functional,
+		TimeProps* timeprops_ptr) {
+
+	HashEntryPtr currentPtr;
+	Element *Curr_El;
+	HashEntryPtr *buck = El_Table->getbucketptr();
+	double const *dx;
+	double const *state_vars;
+	double const *prev_state_vars;
+	double dt;
+
+	dt = timeprops_ptr->dt.at(timeprops_ptr->iter - 1);
+
+	printf("iter=%4d  dt=%8f \n", timeprops_ptr->iter, dt);
+
+	//we do not have make it zero here, because we want to compute the integration over the time and space
+	//*functional = 0.0;
+
+	for (int i = 0; i < El_Table->get_no_of_buckets(); i++)
+		if (*(buck + i)) {
+			currentPtr = *(buck + i);
+			while (currentPtr) {
+				Curr_El = (Element*) (currentPtr->value);
+
+				if (Curr_El->get_adapted_flag() > 0) {
+
+					dx = Curr_El->get_coord();
+					state_vars = Curr_El->get_state_vars();
+					prev_state_vars = Curr_El->get_prev_state_vars();
+
+					// we used trapezoidal integration on time
+					// flag is for time step 0
+
+					*functional += .5
+							* (state_vars[0] * state_vars[0]
+									+ prev_state_vars[0] * prev_state_vars[0]) * dx[0] * dx[1]
+							* dt;
+
+				}
+				currentPtr = currentPtr->next;
+			}
+		}
+
+	cout << "functional is: " << *functional << endl;
+
+	return;
+}
+\end{lstlisting}
+\subsubsection{calc\_jacobian.C}
+\begin{lstlisting}
+#ifdef HAVE_CONFIG_H
+# include <config.h>
+#endif
+#include "../header/hpfem.h"
+
+#define KEY0   3797155840
+#define KEY1   0
+#define ITER   7
+#define EFFELL 0
+#define J      0
+#define JACIND 0
+
+//#define DEBUG
+
+void reset_resflag(ResFlag resflag[5]);
+
+void calc_jacobian(HashTable* El_Table, HashTable* NodeTable,
+		vector<Jacobian*>* solHyst, MatProps* matprops_ptr,
+		TimeProps* timeprops_ptr, MapNames *mapname_ptr, double const increment) {
+
+	int myid, numprocs;
+	MPI_Comm_rank(MPI_COMM_WORLD, &myid);
+	MPI_Comm_size(MPI_COMM_WORLD, &numprocs);
+
+	int neigh_flag;
+	HashEntryPtr* buck = El_Table->getbucketptr();
+	HashEntryPtr currentPtr;
+	Element* Curr_El = NULL;
+	Element *neigh_elem = NULL;
+
+	int iter = timeprops_ptr->iter;
+	double tiny = GEOFLOW_TINY;
+
+	cout << "computing jacobian for time iteration " << iter << endl;
+
+	//here are some dummy values that we need for calc_edge_state
+	int order_flag = 1;
+	double outflow = 0;
+
+	//this array holds ResFlag for element itself and its neighbors
+	ResFlag resflag[5];
+	reset_resflag(resflag);
+
+	// after updating state_vars on cells we need to compute the fluxes
+	calc_edge_states(El_Table, NodeTable, matprops_ptr, timeprops_ptr, myid,
+			&order_flag, &outflow, resflag[0]);
+
+	for (int i = 0; i < El_Table->get_no_of_buckets(); i++) {
+		if (*(buck + i)) {
+			currentPtr = *(buck + i);
+			while (currentPtr) {
+				Curr_El = (Element*) (currentPtr->value);
+
+				if (Curr_El->get_adapted_flag() > 0) {
+
+					int boundary = 0;
+
+					//this part handles if the Curr_El is a boundary element
+					//cout<<"I am running do not worry"<<endl;
+					for (int neighnum = 0; neighnum < 4; neighnum++)
+						if (*(Curr_El->get_neigh_proc() + neighnum) == INIT) {
+							boundary = 1;
+							break;
+						}
+					if (!boundary) {
+
+						Jacobian *jacobian = solHyst->at(Curr_El->get_sol_rec_ind());
+
+						double *state_vars = Curr_El->get_state_vars();
+						double *prev_state_vars = Curr_El->get_prev_state_vars();
+						double *gravity = Curr_El->get_gravity();
+						double *d_gravity = Curr_El->get_d_gravity();
+						double *curvature = Curr_El->get_curvature();
+						Curr_El->calc_stop_crit(matprops_ptr); //this function updates bedfric properties
+						double bedfrict = Curr_El->get_effect_bedfrict();
+
+						double *dx = Curr_El->get_dx();
+						double kactxy[DIMENSION];
+						double orgSrcSgn[2];
+
+						Curr_El->get_slopes_prev(El_Table, NodeTable, matprops_ptr->gamma); // we run this to update d_state_vars
+
+						if (timeprops_ptr->iter < 51)
+							matprops_ptr->frict_tiny = 0.1;
+						else
+							matprops_ptr->frict_tiny = 0.000000001;
+
+						orgSourceSgn(Curr_El, matprops_ptr->frict_tiny, orgSrcSgn);
+
+						for (int effelement = 0; effelement < 5; effelement++) { //0 for the element itself, and the rest id for neighbour elements
+
+							int xp = Curr_El->get_positive_x_side(); //finding the direction of element
+							int yp = (xp + 1) % 4, xm = (xp + 2) % 4, ym = (xp + 3) % 4;
+							int jacmatind = jac_mat_index(effelement, xp); //this function returns the matrix that the jacobian matrix has to be stored
+
+							double void_res[3] = { 0., 0., 0. };
+
+#ifdef DEBUG
+							int gggflag = 0;
+
+							if (*(Curr_El->pass_key()) == KEY0
+									&& *(Curr_El->pass_key() + 1) == KEY1 && iter == ITER
+									&& jacmatind == JACIND)
+								gggflag = 1;
+#endif
+
+							if (effelement == 0 && prev_state_vars[0] == 0.)
+
+								//this is a void element so the residual vector does not change by changing it's values
+								jacobian->set_jacobianMat_zero(jacmatind);
+
+							else if (effelement != 0
+									&& void_neigh_elem(El_Table, Curr_El, effelement))
+
+								//this is a void neighbor element so the residual of the curr_el does not depend on this neighbor
+								jacobian->set_jacobianMat_zero(jacmatind);
+
+							else {
+
+								for (int j = 0; j < 4; j++) {	//there is a problem here: I do not need to compute for first the component of adjoint
+
+									if (j != 1) {	//since we don't want to do that for first component of adjoint
+
+										double dummydt = 0.;//this is dummy because it is needed in clac_edge state->zdirflux->calc_wetness_factor which is useless here
+
+										//Attention make sure that NUM_STATE_VARS are selected correctly
+										//Actually we just need 3, but there is an excessive for first adjoint
+										const int state_num = NUM_STATE_VARS - 2;
+
+										Node* nxp = (Node*) NodeTable->lookup(
+												Curr_El->getNode() + (xp + 4) * 2);
+
+										Node* nyp = (Node*) NodeTable->lookup(
+												Curr_El->getNode() + (yp + 4) * 2);
+
+										Node* nxm = (Node*) NodeTable->lookup(
+												Curr_El->getNode() + (xm + 4) * 2);
+
+										Node* nym = (Node*) NodeTable->lookup(
+												Curr_El->getNode() + (ym + 4) * 2);
+
+										double vec_res[3];
+										double total_res[3] = { 0., 0., 0. };
+
+										int scheme = 0;
+										for (; scheme < 2; scheme++) {
+
+											//this flag shows that the pileheight before adding the increment is below or above the GEOFLOW_TINY.
+											//if it is below GEOFLOW_TINY then there is no need to update fluxes and kactxy
+											int updateflux, srcflag;
+											reset_resflag(resflag);
+#ifdef DEBUG
+											int dbgflag = 0, printflag = 0;
+											double fluxxpold[state_num], fluxypold[state_num]; //we just need to compute jacobian for h,u,v not for cont. adjoint so we don't store the fluxes for the adjoint
+											double fluxxmold[state_num], fluxymold[state_num];
+
+											unsigned key[2];
+											key[0] = *(Curr_El->pass_key());
+											key[1] = *(Curr_El->pass_key() + 1);
+
+											if (*(Curr_El->pass_key()) == KEY0
+													&& *(Curr_El->pass_key() + 1) == KEY1
+													&& jacmatind == JACIND && iter == ITER && j == J)
+
+												record_flux(El_Table, NodeTable, key, matprops_ptr,
+														effelement, myid, fluxxpold, fluxypold, fluxxmold,
+														fluxymold);
+
+#endif
+
+											// here we modify increment to one time compute forward and one time compute backward difference if it is necessary
+											double signe = pow(-1., scheme);
+											double incr = signe * increment;
+											increment_state(El_Table, Curr_El, incr, effelement, j,
+													&updateflux, &srcflag, resflag);
+
+											calc_flux_slope_kact(El_Table, NodeTable, Curr_El,
+													matprops_ptr, myid, effelement, updateflux, srcflag,
+													resflag);
+
+											double dt = timeprops_ptr->dt.at(iter - 1);	//at final time step we do not need the computation of adjoint and we always compute it for the previouse time so we need iter.
+											double dtdx = dt / dx[0];
+											double dtdy = dt / dx[1];
+
+											//Attention make sure that NUM_STATE_VARS are selected correctly
+											//Actually we just need 3, but there is an excessive for first adjoint
+											//const int state_num=NUM_STATE_VARS-2;
+											double fluxxp[state_num], fluxyp[state_num]; //we just need to compute jacobian for h,u,v not for cont. adjoint so we don't store the fluxes for the adjoint
+											double fluxxm[state_num], fluxym[state_num];
+
+											for (int ivar = 0; ivar < state_num; ivar++)
+												fluxxp[ivar] = nxp->flux[ivar];
+
+											for (int ivar = 0; ivar < state_num; ivar++)
+												fluxyp[ivar] = nyp->flux[ivar];
+
+											for (int ivar = 0; ivar < state_num; ivar++)
+												fluxxm[ivar] = nxm->flux[ivar];
+
+											for (int ivar = 0; ivar < state_num; ivar++)
+												fluxym[ivar] = nym->flux[ivar];
+
+#ifdef DEBUG
+											if (*(Curr_El->pass_key()) == KEY0
+													&& *(Curr_El->pass_key() + 1) == KEY1
+													&& jacmatind == JACIND && iter == ITER && j == J)
+												flux_debug(Curr_El, fluxxpold, fluxxmold, fluxypold,
+														fluxymold, fluxxp, fluxxm, fluxyp, fluxym,
+														effelement, j, iter, dt);
+#endif
+
+											double *d_state_vars = Curr_El->get_d_state_vars();
+
+											//here we compute the residuals
+											residual(vec_res, state_vars, prev_state_vars, fluxxp, //4
+													fluxyp, fluxxm, fluxym, dtdx, dtdy, dt, d_state_vars, //7
+													(d_state_vars + NUM_STATE_VARS), curvature, //2
+													matprops_ptr->intfrict, //1
+													bedfrict, gravity, d_gravity, Curr_El->get_kactxy(), //4
+													matprops_ptr->frict_tiny, orgSrcSgn, incr, //3
+													matprops_ptr->epsilon, srcflag); //2
+
+											//we have to return everything back
+											restore(El_Table, NodeTable, Curr_El, matprops_ptr,
+													effelement, j, myid, incr);
+
+											for (int ind = 0; ind < 3; ind++)
+												total_res[ind] += signe * vec_res[ind];
+
+//											if (scheme == 0 && fabs(vec_res[0] / incr) < 5.
+//													&& fabs(vec_res[1] / incr) < 5.
+//													&& fabs(vec_res[2] / incr) < 5.)
+//												//this means that forward difference is enough, and we do not need to compute central difference
+											break;
+
+										}
+
+										double jacincr = increment; //= scheme == 0 ? increment : 2. * increment;
+
+										jacobian->set_jacobian(jacmatind, total_res, j,
+										// following term is necessary to consider the scheme that whether it is forward difference or central difference
+												jacincr); //sets the propper components of the Jacobian for this element
+
+									}
+								}
+							}
+						}
+					} else {
+
+						// this for the element that are on the boundary
+						Jacobian *jacobian = solHyst->at(Curr_El->get_sol_rec_ind());
+						jacobian->set_jacobian();
+
+					}
+				}
+				currentPtr = currentPtr->next;
+			}
+		}
+	}
+	return;
+}
+
+int jac_mat_index(int effelement, int xp) {
+
+	int yp = (xp + 1) % 4, xm = (xp + 2) % 4, ym = (xp + 3) % 4;
+	// effelement - 1 shows which neighbor we are processing
+	if (effelement == 0)
+		return 0;
+	else if (effelement - 1 == xp)
+		return 1;
+	else if (effelement - 1 == yp)
+		return 2;
+	else if (effelement - 1 == xm)
+		return 3;
+	else if (effelement - 1 == ym)
+		return 4;
+	else
+		exit(1);
+}
+
+//this function returns 1 if the neighbor element is void
+int void_neigh_elem(HashTable* El_Table, Element* Curr_El, int effelement) {
+
+	Element* neigh_elem = (Element*) (El_Table->lookup(
+			Curr_El->get_neighbors() + (effelement - 1) * KEYLENGTH));
+
+	assert(neigh_elem);
+
+	if (*(neigh_elem->get_prev_state_vars()) == 0.)
+		return 1;
+
+	return 0;
+}
+
+void restore(HashTable* El_Table, HashTable* NodeTable, Element* Curr_El,
+		MatProps* matprops_ptr, int effelement, int j, int myid, double increment) {
+
+	Element* neigh_elem;
+	double *prev_state_vars = Curr_El->get_prev_state_vars();
+
+	double dummydt = 0., outflow = 0.;
+	int order_flag = 1;
+
+	ResFlag resflag;
+	resflag.callflag = 1;
+	resflag.lgft = 0;
+
+	int xp = Curr_El->get_positive_x_side(); //finding the direction of element
+	int yp = (xp + 1) % 4, xm = (xp + 2) % 4, ym = (xp + 3) % 4;
+
+	if (effelement == 0) { //this part of code add an increment to the state variables to find the Jacobian, but the problem is since it is called after correct, the increment shoud be added to the prev_state_vars
+
+		prev_state_vars[j] -= increment; //changing the state varibales at the element itself
+		Curr_El->calc_edge_states(El_Table, NodeTable, matprops_ptr, myid, dummydt,
+				&order_flag, &outflow, resflag, resflag); //chenge of the state_vars causes the all around fluxes change, this update xp ,yp
+
+		if ((*(Curr_El->get_neigh_proc() + xm)) != INIT) { //we have to make sure that there exit an element in xm side
+
+			Element* elem_xm = (Element*) (El_Table->lookup(
+					Curr_El->get_neighbors() + xm * KEYLENGTH));
+			elem_xm->calc_edge_states(El_Table, NodeTable, matprops_ptr, myid,
+					dummydt, &order_flag, &outflow, resflag, resflag); //this update the flux on share edge with xm
+		}
+		if ((*(Curr_El->get_neigh_proc() + ym)) != INIT) { //we have to make sure that there exit an element in ym side
+
+			Element* elem_ym = (Element*) (El_Table->lookup(
+					Curr_El->get_neighbors() + ym * KEYLENGTH));
+			elem_ym->calc_edge_states(El_Table, NodeTable, matprops_ptr, myid,
+					dummydt, &order_flag, &outflow, resflag, resflag); //this update the flux on share edge with ym
+		}
+
+	} else if ((*(Curr_El->get_neigh_proc() + (effelement - 1))) != INIT) {
+
+		neigh_elem = (Element*) (El_Table->lookup(
+				Curr_El->get_neighbors() + (effelement - 1) * KEYLENGTH));
+		*(neigh_elem->get_prev_state_vars() + j) -= increment;
+
+		if ((effelement - 1) == xp || (effelement - 1) == yp)
+			Curr_El->calc_edge_states(El_Table, NodeTable, matprops_ptr, myid,
+					dummydt, &order_flag, &outflow, resflag, resflag); //if we change the state variables in xp or yp, just the flux at this element has to be updated
+		else
+			neigh_elem->calc_edge_states(El_Table, NodeTable, matprops_ptr, myid,
+					dummydt, &order_flag, &outflow, resflag, resflag); //otherwise the flux at the corresponding element has to be updated
+
+	}
+	Curr_El->get_slopes(El_Table, NodeTable, matprops_ptr->gamma);
+	return;
+}
+
+void calc_flux_slope_kact(HashTable* El_Table, HashTable* NodeTable,
+		Element* Curr_El, MatProps* matprops_ptr, int myid, int effelement,
+		int updateflux, int srcflag, ResFlag resflag[5]) {
+
+	double dummydt = 0., outflow = 0.;
+	int order_flag = 1;
+
+	ResFlag dummyresflag;
+	dummyresflag.callflag = 1;
+	dummyresflag.lgft = 0;
+
+	Element* neigh_elem;
+
+	int xp = Curr_El->get_positive_x_side(); //finding the direction of element
+	int yp = (xp + 1) % 4, xm = (xp + 2) % 4, ym = (xp + 3) % 4;
+
+	Curr_El->get_slopes_prev(El_Table, NodeTable, matprops_ptr->gamma);	//we also have to update the d_state_vars for the current element
+
+	double *d_state_vars = Curr_El->get_d_state_vars();
+
+//										if (srcflag && effelement == 0) {
+//
+//											gmfggetcoef_(Curr_El->get_prev_state_vars(), d_state_vars,
+//													(d_state_vars + NUM_STATE_VARS), dx,
+//													&(matprops_ptr->bedfrict[Curr_El->get_material()]),
+//													&(matprops_ptr->intfrict), &kactxy[0], &kactxy[1],
+//													&tiny, &(matprops_ptr->epsilon));
+//
+//											Curr_El->put_kactxy(kactxy);
+//											Curr_El->calc_stop_crit(matprops_ptr);
+//										}
+
+	if (effelement == 0 && updateflux) { //this part of code add an increment to the state variables to find the Jacobian, but the problem is since it is called after correct, the increment shoud be added to the prev_state_vars
+
+		Curr_El->calc_edge_states(El_Table, NodeTable, matprops_ptr, myid, dummydt,
+				&order_flag, &outflow, resflag[0], dummyresflag); //change of the state_vars causes the all around fluxes change, this update xp ,yp
+		// earlier in this file, we made sure that this element is not a boundary element
+		// so here we do not require to check the neighbor elements to make sure they are not located on the boundary
+
+		Element* elem_xm = (Element*) (El_Table->lookup(
+				Curr_El->get_neighbors() + xm * KEYLENGTH));
+		assert(elem_xm);
+		elem_xm->calc_edge_states(El_Table, NodeTable, matprops_ptr, myid, dummydt,
+				&order_flag, &outflow, resflag[3], resflag[0]); //this update the flux on share edge with xm
+
+		Element* elem_ym = (Element*) (El_Table->lookup(
+				Curr_El->get_neighbors() + ym * KEYLENGTH));
+		assert(elem_ym);
+		elem_ym->calc_edge_states(El_Table, NodeTable, matprops_ptr, myid, dummydt,
+				&order_flag, &outflow, resflag[4], resflag[0]); //this update the flux on share edge with ym
+
+	} else if (effelement != 0 && updateflux) {
+
+		if ((effelement - 1) == xp)
+
+			Curr_El->calc_edge_states(El_Table, NodeTable, matprops_ptr, myid,
+					dummydt, &order_flag, &outflow, resflag[0], resflag[1]); //if we change the state variables in xp or yp, just the flux at this element has to be updated
+		else if ((effelement - 1) == yp)
+			Curr_El->calc_edge_states(El_Table, NodeTable, matprops_ptr, myid,
+					dummydt, &order_flag, &outflow, resflag[0], resflag[2]);
+
+		else if ((effelement - 1) == xm) {
+
+			neigh_elem = (Element*) (El_Table->lookup(
+					Curr_El->get_neighbors() + (effelement - 1) * KEYLENGTH));
+			assert(neigh_elem);
+
+			neigh_elem->calc_edge_states(El_Table, NodeTable, matprops_ptr, myid,
+					dummydt, &order_flag, &outflow, resflag[3], resflag[0]); //otherwise the flux at the corresponding element has to be updated
+//otherwise the flux at the corresponding element has to be updated
+
+		} else {
+
+			neigh_elem = (Element*) (El_Table->lookup(
+					Curr_El->get_neighbors() + (effelement - 1) * KEYLENGTH));
+			assert(neigh_elem);
+
+			neigh_elem->calc_edge_states(El_Table, NodeTable, matprops_ptr, myid,
+					dummydt, &order_flag, &outflow, resflag[4], resflag[0]); //otherwise the flux at the corresponding element has to be updated
+//otherwise the flux at the corresponding element has to be updated
+		}
+
+	}
+
+	return;
+
+}
+
+void increment_state(HashTable* El_Table, Element* Curr_El, double increment,
+		int effelement, int j, int* updateflux, int* srcflag, ResFlag resflag[5]) {
+
+	*updateflux = 1;
+	*srcflag = 1;
+	double *prev_state_vars = Curr_El->get_prev_state_vars();
+
+	int xp = Curr_El->get_positive_x_side(); //finding the direction of element
+	int yp = (xp + 1) % 4, xm = (xp + 2) % 4, ym = (xp + 3) % 4;
+
+	if (effelement == 0) { //this part of code add an increment to the state variables to find the Jacobian, but the problem is since it is called after correct, the increment shoud be added to the prev_state_vars
+
+		if (j == 0 && prev_state_vars[j] < GEOFLOW_TINY) {
+			*updateflux = 0;
+			*srcflag = 0;
+			resflag[0].lgft = 1;
+		}
+
+		prev_state_vars[j] += increment; //changing the state varibales at the element itself
+
+	} else {
+
+		Element* neigh_elem = (Element*) (El_Table->lookup(
+				Curr_El->get_neighbors() + (effelement - 1) * KEYLENGTH));
+		assert(neigh_elem);
+
+		if (j == 0 && *(neigh_elem->get_prev_state_vars() + j) < GEOFLOW_TINY) {
+			*updateflux = 0;
+			resflag[jac_mat_index(effelement, xp)].lgft = 1;
+		}
+
+		*(neigh_elem->get_prev_state_vars() + j) += increment;
+
+	}
+	return;
+}
+
+void reset_resflag(ResFlag resflag[5]) {
+
+	for (int i = 0; i < 5; i++) {
+		resflag[i].callflag = 1;
+		resflag[i].lgft = 0;
+	}
+
+	return;
+}
+\end{lstlisting}
+\subsubsection{calc\_adjoint.C}
+\begin{lstlisting}
+#ifdef HAVE_CONFIG_H
+# include <config.h>
+#endif
+#include "../header/hpfem.h"
+
+#define KEY0 3916612844
+#define KEY1 1321528399
+#define ITER 1
+
+void calc_adjoint_elem(HashTable* El_Table, vector<Jacobian*>* solHyst,
+		Element *Curr_El, int iter, int adjiter, int myid);
+
+void calc_adjoint(HashTable* El_Table, vector<Jacobian*>* solHyst, int iter,
+		int adjiter, int myid) {
+
+	HashEntryPtr* buck = El_Table->getbucketptr();
+	HashEntryPtr currentPtr;
+	Element* Curr_El = NULL;
+
+	double aa, bb = .1;
+
+	for (int i = 0; i < El_Table->get_no_of_buckets(); i++) {
+		if (*(buck + i)) {
+			currentPtr = *(buck + i);
+			while (currentPtr) {
+				Curr_El = (Element*) (currentPtr->value);
+
+				if (Curr_El->get_adapted_flag() > 0) {
+					if (*(Curr_El->pass_key()) == KEY0
+							&& *(Curr_El->pass_key() + 1) == KEY1 && iter == ITER)
+						aa = bb;
+
+					calc_adjoint_elem(El_Table, solHyst, Curr_El, iter, adjiter, myid);
+				}
+				currentPtr = currentPtr->next;
+			}
+		}
+	}
+	return;
+}
+
+void calc_adjoint_elem(HashTable* El_Table, vector<Jacobian*>* solHyst,
+		Element *Curr_El, int iter, int adjiter, int myid) {
+
+	double* adjoint = (Curr_El->get_state_vars() + 6);
+	Jacobian *jacobian, *neighjac;
+	jacobian = solHyst->at(Curr_El->get_sol_rec_ind());
+
+	if (adjiter == 0) {
+
+		for (int i = 0; i < 3; ++i)
+			adjoint[i] = *(jacobian->get_funcsens(iter) + i);
+
+	} else {
+
+		Element *neigh_elem;
+		double* adjoint_pointer;
+		double adjcontr[3] = { 0.0, 0.0, 0.0 };
+		double*** jacobianmat;
+
+		for (int effelement = 0; effelement < 5; effelement++) { //0 for the element itself, and the rest id for neighbour elements
+
+			if (effelement == 0) {		    //this part of code
+
+				adjoint_pointer = (Curr_El->get_prev_state_vars() + 6);
+
+				jacobianmat = jacobian->get_jacobian();
+
+				for (int k = 0; k < 3; ++k)
+					for (int l = 0; l < 3; ++l)
+						adjcontr[k] += adjoint_pointer[l] * jacobianmat[0][k][l];
+
+			} else {
+
+				neigh_elem = Curr_El->get_side_neighbor(El_Table, effelement - 1);//basically we are checking all neighbor elements, and start from xp neighbor
+				if (neigh_elem) {
+
+					adjoint_pointer = (neigh_elem->get_prev_state_vars() + 6);
+					neighjac = solHyst->at(neigh_elem->get_sol_rec_ind());
+					jacobianmat = neighjac->get_jacobian();
+
+					int jacind;
+
+					switch (effelement) {
+					case 1:	//in xp neighbor I have to read jacobian of xm, because position of curr_el is in xm side of that neighbor
+						jacind = 3;
+						break;
+					case 2:		    //for yp return ym
+						jacind = 4;
+						break;
+					case 3:		    //for xm return xp
+						jacind = 1;
+						break;
+					case 4:		    //for ym return yp
+						jacind = 2;
+						break;
+					default:
+						cout << "invalid neighbor position" << endl;
+					}
+
+					for (int k = 0; k < 3; ++k)
+						for (int l = 0; l < 3; ++l)
+							adjcontr[k] += adjoint_pointer[l] * jacobianmat[jacind][k][l];
+
+				}
+			}
+		}
+
+		for (int j = 0; j < 3; j++)
+			adjoint[j] = *(jacobian->get_funcsens(iter-1) + j) - adjcontr[j];
+	}
+
+	for (int i = 0; i < 3; i++)
+		if (isnan(adjoint[i]) || isinf(adjoint[i]))
+			cout << "it is incorrect  " << endl;
+
+	return;
+}
+\end{lstlisting}
+\subsubsection{error\_compute.C}
+\begin{lstlisting}
+#ifdef HAVE_CONFIG_H
+# include <config.h>
+#endif
+#include "../header/hpfem.h"
+
+#define KEY0   3788876458
+#define KEY1   2863311530
+#define ITER   5
+
+void error_compute(HashTable* El_Table, HashTable* NodeTable,
+		TimeProps* timeprops_ptr, MatProps* matprops_ptr, int iter, int myid,
+		int numprocs) {
+
+	setup_geoflow(El_Table, NodeTable, myid, numprocs, matprops_ptr,
+			timeprops_ptr);
+
+	int order_flag = 1;	//this is dummy here
+	double outflow[1];	//this is dummy here
+	ResFlag resflag;
+	resflag.callflag = 1;
+	resflag.lgft = 0;
+	calc_edge_states(El_Table, NodeTable, matprops_ptr, timeprops_ptr, myid,
+			&order_flag, outflow, resflag);
+
+	HashEntryPtr* buck = El_Table->getbucketptr();
+	HashEntryPtr currentPtr;
+	Element* Curr_El = NULL;
+
+	if (iter != 0) {
+		for (int i = 0; i < El_Table->get_no_of_buckets(); i++)
+			if (*(buck + i)) {
+				currentPtr = *(buck + i);
+				while (currentPtr) {
+					Curr_El = (Element*) (currentPtr->value);
+					if (Curr_El->get_adapted_flag() == NEWSON) {
+
+						int dbgflag;
+						if (*(Curr_El->pass_key()) == KEY0
+								&& *(Curr_El->pass_key() + 1) == KEY1 && iter == ITER)
+							dbgflag = 1;
+
+						double *state_vars = Curr_El->get_state_vars();
+						double *prev_state_vars = Curr_El->get_prev_state_vars();
+						double *gravity = Curr_El->get_gravity();
+						double *d_gravity = Curr_El->get_d_gravity();
+						double *curvature = Curr_El->get_curvature();
+						Curr_El->calc_stop_crit(matprops_ptr); //this function updates bedfric properties
+						double bedfrict = Curr_El->get_effect_bedfrict();
+						double velocity[DIMENSION];
+						double *dx = Curr_El->get_dx();
+						double kactxy[DIMENSION];
+						double orgSrcSgn[2], vec_res[3];
+
+						Curr_El->get_slopes_prev(El_Table, NodeTable, matprops_ptr->gamma);
+						double *d_state_vars = Curr_El->get_d_state_vars();
+
+						if (timeprops_ptr->iter < 50)
+							matprops_ptr->frict_tiny = 0.1;
+						else
+							matprops_ptr->frict_tiny = 0.000000001;
+
+						orgSourceSgn(Curr_El, matprops_ptr->frict_tiny, orgSrcSgn);
+
+						double dt = timeprops_ptr->dt.at(iter - 1); // if we have n iter size of dt vector is n-1
+						double dtdx = dt / dx[0];
+						double dtdy = dt / dx[1];
+
+						double *el_error = Curr_El->get_el_error();
+
+						double *constAdj = Curr_El->get_const_adj();
+						double *correction = Curr_El->get_correction();
+
+						int xp = Curr_El->get_positive_x_side(); //finding the direction of element
+						int yp = (xp + 1) % 4, xm = (xp + 2) % 4, ym = (xp + 3) % 4;
+
+						const int state_num = NUM_STATE_VARS - 2;
+
+						Node* nxp = (Node*) NodeTable->lookup(
+								Curr_El->getNode() + (xp + 4) * 2);
+
+						Node* nyp = (Node*) NodeTable->lookup(
+								Curr_El->getNode() + (yp + 4) * 2);
+
+						Node* nxm = (Node*) NodeTable->lookup(
+								Curr_El->getNode() + (xm + 4) * 2);
+
+						Node* nym = (Node*) NodeTable->lookup(
+								Curr_El->getNode() + (ym + 4) * 2);
+
+						double fluxxp[state_num], fluxyp[state_num]; //we just need to compute jacobian for h,u,v not for cont. adjoint so we don't store the fluxes for the adjoint
+						double fluxxm[state_num], fluxym[state_num];
+
+						for (int ivar = 0; ivar < state_num; ivar++)
+							fluxxp[ivar] = nxp->flux[ivar];
+
+						for (int ivar = 0; ivar < state_num; ivar++)
+							fluxyp[ivar] = nyp->flux[ivar];
+
+						for (int ivar = 0; ivar < state_num; ivar++)
+							fluxxm[ivar] = nxm->flux[ivar];
+
+						for (int ivar = 0; ivar < state_num; ivar++)
+							fluxym[ivar] = nym->flux[ivar];
+
+						if (*(Curr_El->pass_key()) == KEY0
+								&& *(Curr_El->pass_key() + 1) == KEY1 && iter == ITER)
+							dbgflag = 1;
+
+						residual(vec_res, state_vars, prev_state_vars, fluxxp, fluxyp,
+								fluxxm, fluxym, dtdx, dtdy, dt, d_state_vars,
+								(d_state_vars + NUM_STATE_VARS), curvature,
+								matprops_ptr->intfrict, bedfrict, gravity, d_gravity,
+								Curr_El->get_kactxy(), matprops_ptr->frict_tiny, orgSrcSgn,
+								0./*here increment is zero*/, matprops_ptr->epsilon);
+
+						state_vars[1] = vec_res[0];
+						state_vars[4] = vec_res[1];
+						state_vars[5] = vec_res[2];
+
+						el_error[1] = 0.0;
+						*correction = 0.0;
+						for (int j = 0; j < 3; j++) {
+							el_error[1] += vec_res[j]
+									* (state_vars[NUM_STATE_VARS + j] - constAdj[j]);
+
+							*correction += vec_res[j] * state_vars[NUM_STATE_VARS + j];
+						}
+						//if (el_error[1]!=0)
+						//	cout<<"it should print blue"<<endl ;
+
+					}
+					currentPtr = currentPtr->next;
+				}
+			}
+	}
+
+#ifdef DEBUG
+	if (checkElement(El_Table))
+	exit(22);
+//		(timeprops_ptr->iter)++;
+//		tecplotter(El_Table, NodeTable, matprops_ptr, timeprops_ptr, mapname_ptr,
+//				dummyv_star, adjflag);
+	cout << "number of elements -7   " << num_nonzero_elem(El_Table, -7) << endl
+	<< "number of elements -6   " << num_nonzero_elem(El_Table, -6) << endl
+	<< "number of elements  0   " << num_nonzero_elem(El_Table, 0) << endl
+	<< "number of elements  1   " << num_nonzero_elem(El_Table, 1) << endl
+	<< "number of elements  2   " << num_nonzero_elem(El_Table, 2) << endl
+	<< "number of elements  3   " << num_nonzero_elem(El_Table, 3) << endl
+	<< "number of elements  4   " << num_nonzero_elem(El_Table, 4) << endl
+	<< "number of elements  5   " << num_nonzero_elem(El_Table, 5) << endl;
+//		getchar();
+	int nonz = num_nonzero_elem(El_Table);
+
+	cout << "number of elements after refinement  " << nonz << endl;
+
+	for (int i = 0; i < El_Table->get_no_of_buckets(); i++) {
+		if (*(buck + i)) {
+			currentPtr = *(buck + i);
+			while (currentPtr) {
+				Curr_El = (Element*) (currentPtr->value);
+				currentPtr = currentPtr->next;
+				if (Curr_El->get_adapted_flag() > 0) {
+
+					int index = Curr_El->get_sol_rec_ind();
+					dbgvec[index] += 1;
+					pass[index] = 1;
+
+				}
+			}
+		}
+	}
+
+	for (int i = 0; i < nonz1; i++) {
+		if (dbgvec[i] != 4) {
+			cout << "these elements have problem:   " << i << endl
+			<< "the value is  " << dbgvec[i] << endl;
+			exit(EXIT_FAILURE);
+
+		} else if (pass[i] != 1) {
+			cout << "this index has not been passed  " << i << endl;
+			exit(EXIT_FAILURE);
+
+		}
+	}
+#endif
+	return;
+}
+\end{lstlisting}
+
+\subsubsection{residual.C}
+\begin{lstlisting}
+#ifdef HAVE_CONFIG_H
+# include <config.h>
+#endif
+#include "../header/hpfem.h"
+
+#define	DEBUG
+
+void residual(double* residual, double *state_vars, double *prev_state_vars, //3
+		double *fluxxp, double *fluxyp, double *fluxxm, double *fluxym, double dtdx, //5
+		double dtdy, double dt, double *d_state_vars_x, double *d_state_vars_y, //4
+		double *curvature, double intfrictang, double bedfrict, double *gravity, //4
+		double *dgdx, double* kactxyelem, double fric_tiny, double* orgSrcSgn, //4
+		double increment, double epsilon, int srcflag) {
+
+	double velocity[DIMENSION];
+	double kactxy[DIMENSION];
+	//double bedfrict;
+
+	if (prev_state_vars[0] > GEOFLOW_TINY) {
+		for (int k = 0; k < DIMENSION; k++)
+			kactxy[k] = kactxyelem[k];
+
+		if ((prev_state_vars[2] == 0. && prev_state_vars[3] == increment)
+				|| (prev_state_vars[3] == 0. && prev_state_vars[2] == increment)) {
+			velocity[0] = 0.;
+			velocity[1] = 0.;
+		} else {
+
+			// fluid velocities
+			velocity[0] = prev_state_vars[2] / prev_state_vars[0];
+			velocity[1] = prev_state_vars[3] / prev_state_vars[0];
+		}
+
+	} else {
+		for (int k = 0; k < DIMENSION; k++) {
+			kactxy[k] = epsilon;
+			velocity[k] = 0.;
+		}
+		//bedfrict = bedfrictin;
+	}
+
+	for (int i = 0; i < 3; i++)
+		residual[i] = 0.0;
+
+	residual[0] = state_vars[0] - prev_state_vars[0]
+			+ dtdx * (fluxxp[0] - fluxxm[0]) + dtdy * (fluxyp[0] - fluxym[0]);
+	residual[1] = state_vars[2] - prev_state_vars[2]
+			+ dtdx * (fluxxp[2] - fluxxm[2]) + dtdy * (fluxyp[2] - fluxym[2]);
+	residual[2] = state_vars[3] - prev_state_vars[3]
+			+ dtdx * (fluxxp[3] - fluxxm[3]) + dtdy * (fluxyp[3] - fluxym[3]);
+
+	if (prev_state_vars[0] > GEOFLOW_TINY && srcflag) {
+
+		double unitvx = 0., unitvy = 0., h_inv = 0., speed = 0.;
+
+		speed = sqrt(velocity[0] * velocity[0] + velocity[1] * velocity[1]);
+
+		if (speed > 0.) {
+			unitvx = velocity[0] / speed;
+			unitvy = velocity[1] / speed;
+		}
+
+		//x dir
+		double s1 = gravity[0] * prev_state_vars[0];
+
+		double sin_int_fric = sin(intfrictang);
+		double s2 = orgSrcSgn[0] * prev_state_vars[0] * kactxy[0]
+				* (gravity[2] * d_state_vars_y[0] + dgdx[1] * prev_state_vars[0])
+				* sin_int_fric;
+		double tan_bed_fric = tan(bedfrict);
+		double s3 = unitvx
+				* max(
+						gravity[2] * prev_state_vars[0]
+								+ velocity[0] * prev_state_vars[2] * curvature[0], 0.0)
+				* tan_bed_fric;
+
+		residual[1] -= dt * (s1 - s2 - s3);
+
+		//y dir
+
+		s1 = gravity[1] * prev_state_vars[0];
+
+		s2 = orgSrcSgn[1] * prev_state_vars[0] * kactxy[0]
+				* (gravity[2] * d_state_vars_x[0] + dgdx[0] * prev_state_vars[0])
+				* sin_int_fric;
+
+		s3 = unitvy
+				* max(
+						gravity[2] * prev_state_vars[0]
+								+ velocity[1] * prev_state_vars[3] * curvature[1], 0.0)
+				* tan_bed_fric;
+
+		residual[2] -= dt * (s1 - s2 - s3);
+	}
+
+#ifdef DEBUG
+
+//	for (int k = 0; k < 3; k++)
+//		if (residual[k] > 1e-5) {
+//			cout << "something that has to be checked" << endl << flush;
+//			exit(-2);
+//		}
+
+	for (int k = 0; k < 3; k++)
+		if (isnan(residual[k])) {
+			cout << "exit for NAN in residual" << endl << flush;
+			exit(-1);
+		}
+
+	for (int k = 0; k < 3; k++)
+		if (isinf(residual[k])) {
+			cout << "exit for Inf in residual" << endl << flush;
+			exit(-2);
+		}
+#endif
+
+	return;
+}
+
+\end{lstlisting}
+\subsubsection{uniform\_refine.C}
+\begin{lstlisting}
+#ifdef HAVE_CONFIG_H
+# include <config.h>
+#endif
+#include "../header/hpfem.h"
+
+#define KEY0   3788876458
+#define KEY1   2863311530
+#define ITER   5
+
+void uinform_refine(HashTable* El_Table, HashTable* NodeTable,
+		TimeProps* timeprops_ptr, MatProps* matprops_ptr, int numprocs, int myid) {
+
+	HashEntryPtr* buck = El_Table->getbucketptr();
+	HashEntryPtr currentPtr;
+	Element* Curr_El = NULL;
+	int rescomp = 1;
+
+	//for debugging perpose
+	unsigned key[2] = { KEY0, KEY1 };
+	double max=0;
+
+#ifdef DEBUG
+	double dummyv_star = 0.0;
+	int adjflag = 1;
+	tecplotter(El_Table, NodeTable, matprops_ptr, timeprops_ptr, mapname_ptr,
+			dummyv_star, adjflag);
+	int nonz1 = num_nonzero_elem(El_Table);
+
+	cout << "number of elements before refinement  " << nonz1 << endl;
+
+	int *dbgvec = new int[nonz1];
+	int *pass = new int[nonz1];
+	for (int i = 0; i < nonz1; i++) {
+		dbgvec[i] = 0;
+		pass[i] = 0;
+	}
+	if (checkElement(El_Table))
+	exit(23);
+#endif
+
+//	if (checkElement(El_Table, &max, key))
+//		cout << "here is the problem" << endl;
+
+	htflush(El_Table, NodeTable, 1);
+	move_data(numprocs, myid, El_Table, NodeTable, timeprops_ptr);
+
+	for (int i = 0; i < El_Table->get_no_of_buckets(); i++) {
+		if (*(buck + i)) {
+			currentPtr = *(buck + i);
+			while (currentPtr) {
+				Curr_El = (Element*) (currentPtr->value);
+				if (Curr_El->get_adapted_flag() >= NOTRECADAPTED) {
+					Curr_El->put_adapted_flag(NOTRECADAPTED);
+				}
+				currentPtr = currentPtr->next;
+			}
+		}
+	}
+
+	ElemPtrList RefinedList(num_nonzero_elem(El_Table));
+
+	for (int i = 0; i < El_Table->get_no_of_buckets(); i++) {
+		if (*(buck + i)) {
+			currentPtr = *(buck + i);
+			while (currentPtr) {
+				Curr_El = (Element*) (currentPtr->value);
+				currentPtr = currentPtr->next;
+				if (Curr_El->get_adapted_flag() == NOTRECADAPTED) {
+
+					refinewrapper(El_Table, NodeTable, matprops_ptr, &RefinedList,
+							Curr_El, rescomp);
+				}
+
+			}
+		}
+	}
+//	if (checkElement(El_Table,&max, key))
+//		cout << "here is the problem" << endl;
+
+#ifdef DEBUG
+	if (checkElement(El_Table))
+	exit(24);
+	cout << "number of elements -7   " << num_nonzero_elem(El_Table, -7) << endl
+	<< "number of elements -6   " << num_nonzero_elem(El_Table, -6) << endl
+	<< "number of elements  0   " << num_nonzero_elem(El_Table, 0) << endl
+	<< "number of elements  1   " << num_nonzero_elem(El_Table, 1) << endl
+	<< "number of elements  2   " << num_nonzero_elem(El_Table, 2) << endl
+	<< "number of elements  3   " << num_nonzero_elem(El_Table, 3) << endl
+	<< "number of elements  4   " << num_nonzero_elem(El_Table, 4) << endl
+	<< "number of elements  5   " << num_nonzero_elem(El_Table, 5) << endl;
+#endif
+
+	bilinear_interp(El_Table);	//this function reconstruct linear interpolation
+
+//	if (checkElement(El_Table, &max, key))
+//		cout << "here is the problem" << endl;
+
+	refine_neigh_update(El_Table, NodeTable, numprocs, myid, (void*) &RefinedList,
+			timeprops_ptr);	//this function delete old father elements
+
+//	if (checkElement(El_Table, &max, key))
+//		cout << "here is the problem" << endl;
+	RefinedList.trashlist();
+
+	move_data(numprocs, myid, El_Table, NodeTable, timeprops_ptr);
+
+//	if (checkElement(El_Table, &max, key))
+//		cout << "here is the problem" << endl;
+	return;
+}
+\end{lstlisting}
+
+\subsubsection{bilinear\_interp.C}
+\begin{lstlisting}
+#ifdef HAVE_CONFIG_H
+# include <config.h>
+#endif
+#include "../header/hpfem.h"
+
+void bilinear_interp(HashTable* El_Table) {
+
+	HashEntryPtr currentPtr;
+	Element *Curr_El, *father, *elem11, *elem12, *elem21, *elem22;
+	HashEntryPtr *buck = El_Table->getbucketptr();
+	int which_son;
+
+	for (int i = 0; i < El_Table->get_no_of_buckets(); i++)
+		if (*(buck + i)) {
+			currentPtr = *(buck + i);
+			while (currentPtr) {
+				Curr_El = (Element*) (currentPtr->value);
+				if (Curr_El->get_adapted_flag() == NEWSON) {
+					father = (Element*) El_Table->lookup(Curr_El->getfather());
+					assert(father->get_adapted_flag()==OLDFATHER);
+
+					which_son = Curr_El->get_which_son();
+#ifdef DEBUG
+					double aa, bb = .1;
+					if (*(Curr_El->pass_key()) == KEY0
+							&& *(Curr_El->pass_key() + 1) == KEY1)
+					aa = bb;
+#endif
+					switch (which_son) {
+
+					case 0: {
+						elem22 = father;
+						elem12 = father->get_side_neighbor(El_Table, 2);
+						elem21 = father->get_side_neighbor(El_Table, 3);
+						elem11 = father->get_side_neighbor(El_Table, 6);
+						bilinear_interp_elem(elem11, elem21, elem12, elem22, Curr_El);
+					}
+						break;
+					case 1: {
+						elem22 = father->get_side_neighbor(El_Table, 0);
+						elem12 = father;
+						elem21 = father->get_side_neighbor(El_Table, 7);
+						elem11 = father->get_side_neighbor(El_Table, 3);
+						bilinear_interp_elem(elem11, elem21, elem12, elem22, Curr_El);
+
+					}
+						break;
+					case 2: {
+						elem22 = father->get_side_neighbor(El_Table, 4);
+						elem12 = father->get_side_neighbor(El_Table, 1);
+						elem21 = father->get_side_neighbor(El_Table, 0);
+						elem11 = father;
+						bilinear_interp_elem(elem11, elem21, elem12, elem22, Curr_El);
+
+					}
+						break;
+					case 3: {
+						elem22 = father->get_side_neighbor(El_Table, 1);
+						elem12 = father->get_side_neighbor(El_Table, 5);
+						elem21 = father;
+						elem11 = father->get_side_neighbor(El_Table, 2);
+						bilinear_interp_elem(elem11, elem21, elem12, elem22, Curr_El);
+
+					}
+						break;
+					default:
+						cout << "incorrect son please check me" << endl;
+
+					}
+
+				}
+				currentPtr = currentPtr->next;
+			}
+		}
+	return;
+}
+
+double bilinear_interp_value(double x1, double x2, double y1, double y2,
+		double f11, double f21, double f12, double f22, double xinterp,
+		double yinterp, int type) {
+
+//	xmin = x1
+//	xmax = x2
+//	ymin = y1
+//	ymax = y2
+//
+//	f12--------f22
+//	|           |
+//	|           |
+//	|  interp   |
+//	|           |
+//	|           |
+//	f11---------f21
+
+	double interp = 0.0;
+	switch (type) {
+	case 0:			//for bilinear interpolation
+		interp = (f11 * (x2 - xinterp) * (y2 - yinterp)
+				+ f21 * (xinterp - x1) * (y2 - yinterp)
+				+ f12 * (x2 - xinterp) * (yinterp - y1)
+				+ f22 * (xinterp - x1) * (yinterp - y1)) / ((x2 - x1) * (y2 - y1));
+		break;
+	case 1:
+		//interpolation in y
+		//no other modification on bilinear interpolation is required,
+		//since we call the function such that put zero for those elements that do not exist
+		//we just removed (x2 - x1) from denominator
+		interp = (f11 * (x2 - xinterp) * (y2 - yinterp)
+				+ f21 * (xinterp - x1) * (y2 - yinterp)
+				+ f12 * (x2 - xinterp) * (yinterp - y1)
+				+ f22 * (xinterp - x1) * (yinterp - y1)) / (y2 - y1);
+		break;
+	case 2:
+		//interpolation in x
+		//no other modification on bilinear interpolation is required,
+		//since we call the function such that put zero for those elements that do not exist
+		//we just removed (y2 - y1) from denominator
+		interp = (f11 * (x2 - xinterp) * (y2 - yinterp)
+				+ f21 * (xinterp - x1) * (y2 - yinterp)
+				+ f12 * (x2 - xinterp) * (yinterp - y1)
+				+ f22 * (xinterp - x1) * (yinterp - y1)) / (x2 - x1);
+		break;
+
+	default:
+		cout << "not a valid type in interp_value function " << endl;
+	}
+	if (isnan(interp) || isinf(interp))
+		cout << "it is so sad that I found you" << endl;
+	return (interp);
+}
+
+void bilinear_interp_elem(Element *elem11, Element *elem21, Element *elem12,
+		Element *elem22, Element *Curr_El) {
+
+	double *state_vars, *elem11_state, *elem12_state, *elem21_state,
+			*elem22_state;
+	double *prev_state_vars, *elem11_prev_state, *elem12_prev_state,
+			*elem21_prev_state, *elem22_prev_state;
+	double *coord, *elem11_coord, *elem12_coord, *elem21_coord, *elem22_coord;
+
+	int type = 0;			//this is just a flag that indicates the type of element
+
+	state_vars = Curr_El->get_state_vars();
+	prev_state_vars = Curr_El->get_prev_state_vars();
+	coord = Curr_El->get_coord();
+
+	elem11_state = elem11->get_state_vars();
+	elem12_state = elem12->get_state_vars();
+	elem21_state = elem21->get_state_vars();
+	elem22_state = elem22->get_state_vars();
+
+	elem11_prev_state = elem11->get_prev_state_vars();
+	elem12_prev_state = elem12->get_prev_state_vars();
+	elem21_prev_state = elem21->get_prev_state_vars();
+	elem22_prev_state = elem22->get_prev_state_vars();
+
+	elem11_coord = elem11->get_coord();
+	elem12_coord = elem12->get_coord();
+	elem21_coord = elem21->get_coord();
+	elem22_coord = elem22->get_coord();
+
+	if (elem11 && elem12 && elem21 && elem22) {
+		//this is an ordinary case for an element inside the domain
+		//type = 0; we initialized type=0
+		double aaa, bbb = .1;
+		for (int j = 0; j < NUM_STATE_VARS + 3; j++)
+			if ( isnan(
+					elem11_state[j]) || isnan(elem12_state[j]) || isnan(elem21_state[j]) || isnan(elem22_state[j]) ||
+					isinf(elem11_state[j]) || isinf(elem12_state[j]) || isinf(elem21_state[j]) || isinf(elem22_state[j]))
+				aaa = bbb;
+
+		for (int j = 0; j < NUM_STATE_VARS + 3; j++) {
+			state_vars[j] = bilinear_interp_value(elem11_coord[0], elem21_coord[0],
+					elem21_coord[1], elem22_coord[1], elem11_state[j], elem21_state[j],
+					elem12_state[j], elem22_state[j], coord[0], coord[1], type);
+
+			prev_state_vars[j] = bilinear_interp_value(elem11_coord[0],
+					elem21_coord[0], elem21_coord[1], elem22_coord[1],
+					elem11_prev_state[j], elem21_prev_state[j], elem12_prev_state[j],
+					elem22_prev_state[j], coord[0], coord[1], type);
+		}
+	} else if ((!elem11 && !elem12 && elem21 && elem22)	//interpolation only in y
+	|| (elem11 && elem12 && !elem21 && !elem22)	//left or right side of father is boundary
+			) {
+		type = 1;
+		if (elem11) {	// in this case elem21 & elem22 do not exist, so we replace their value with zero
+			for (int j = 0; j < NUM_STATE_VARS + 3; j++) {
+				state_vars[j] = bilinear_interp_value(0,
+						0,	//interpolation is in y, so x position is not important
+						elem11_coord[1], elem12_coord[1], elem11_state[j], 0,
+						elem12_state[j], 0, coord[0], coord[1], type);
+
+				prev_state_vars[j] = bilinear_interp_value(0,
+						0,	//interpolation is in y, so x position is not important
+						elem11_coord[1], elem12_coord[1], elem11_prev_state[j], 0,
+						elem12_prev_state[j], 0, coord[0], coord[1], type);
+			}
+
+		} else {// in this case elem11 & elem12 do not exist, so we replace their value with zero
+
+			for (int j = 0; j < NUM_STATE_VARS + 3; j++) {
+				state_vars[j] = bilinear_interp_value(0,
+						0,	//interpolation is in y, so x position is not important
+						elem21_coord[1], elem22_coord[1], 0, elem21_state[j], 0,
+						elem22_state[j], coord[0], coord[1], type);
+
+				prev_state_vars[j] = bilinear_interp_value(0,
+						0,	//interpolation is in y, so x position is not important
+						elem21_coord[1], elem22_coord[1], 0, elem21_prev_state[j], 0,
+						elem22_prev_state[j], coord[0], coord[1], type);
+			}
+		}
+	} else if ((!elem11 && elem12 && !elem21 && elem22)	//interpolation only in x
+	|| (elem11 && !elem12 && elem21 && !elem22)	//top or bottom side of father is boundary
+			) {
+		type = 2;
+
+		if (elem11) {	// in this case elem12 & elem22 do not exist, so we replace their value with zero
+			for (int j = 0; j < NUM_STATE_VARS + 3; j++) {
+				state_vars[j] = bilinear_interp_value(elem11_coord[0], elem21_coord[0],
+						0, 0,	//interpolation is in x, so y position is not important
+						elem11_state[j], elem21_state[j], 0, 0, coord[0], coord[1], type);
+
+				prev_state_vars[j] = bilinear_interp_value(elem11_coord[0],
+						elem21_coord[0], 0,
+						0,	//interpolation is in x, so y position is not important
+						elem11_prev_state[j], elem21_prev_state[j], 0, 0, coord[0],
+						coord[1], type);
+			}
+
+		} else {// in this case elem11 & elem21 do not exist, so we replace their value with zero
+
+			for (int j = 0; j < NUM_STATE_VARS + 3; j++) {
+				state_vars[j] = bilinear_interp_value(elem12_coord[0], elem22_coord[0],
+						0, 0,	//interpolation is in x, so y position is not important
+						0, 0, elem12_state[j], elem22_state[j], coord[0], coord[1], type);
+
+				prev_state_vars[j] = bilinear_interp_value(elem12_coord[0],
+						elem22_coord[0], 0,
+						0,	//interpolation is in x, so y position is not important
+						0, 0, elem12_prev_state[j], elem22_prev_state[j], coord[0],
+						coord[1], type);
+			}
+		}
+
+	} else if ((elem11 && !elem12 && !elem21 && !elem22)//father is in corner so there is no element for interp
+	|| (!elem11 && elem12 && !elem21 && !elem22)//we do not do any extrapolation and leave as it is,
+			|| (!elem11 && !elem12 && elem21 && !elem22)//which in refinement constructor should be the value of father element
+			|| (!elem11 && !elem12 && !elem21 && elem22)) {
+		//do not do anything
+
+	} else {
+		cout << "something is wrong in this configuration" << endl;
+		*(Curr_El->get_state_vars()) = 50;
+		return;
+	}
+
+	return;
+
+}
+\end{lstlisting}
+ 
+ \newpage
 \bibliographystyle{plain}
 \bibliography{mybib}
 \end{document}          
