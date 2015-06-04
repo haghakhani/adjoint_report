@@ -1,0 +1,167 @@
+\documentclass[a4paper,10pt]{article}
+\usepackage[utf8x]{inputenc}
+
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{yfonts}
+\usepackage{mathrsfs}
+
+\setlength\parindent{0pt}
+\setcounter{section}{0}
+
+% Title Page
+\title{Discrete Adjoint for TITAN2D}
+\author{H. AGHAKHAI}
+\date{}
+
+
+\begin{document}
+\maketitle
+% 
+% \begin{abstract}
+% 
+% \end{abstract}
+
+The aim of this report is to briefly show how the discrete adjoint for the system of Savage\_Hutter partial differentail equations 
+is computed. 
+\section{Mathematical Definition}
+Let $U$ and $V$ be two vector spaces, and $L$ be a linear operator that maps any $u \in U$ into $v \in V$.
+And $<\cdot,\cdot>$ be a bilinear map that maps any two vectors like $u,v$ two a real number, $U \times V \rightarrow  \mathbb{R} $.
+Then the adjoint operator, $L^*$, of $L$ is defined:$<Lu,v> = <u,L^*v>$.\newline
+Given $R(U,\alpha)$ as a system of governing equations, where $U$ is the solution vector, and $\alpha$ 
+is the vector of design parameters.\newline 
+The object is to minimize \hspace{.05 in} J$(U,\alpha)$ \hspace{.1 in} subject to \hspace{.1 in} $R(U,\alpha)=0$\newline
+So in optimization context we can say that we want to optimize the goal functional under the restriction of the governing equations.
+If we write the first variation of the functional and the governing equations for a discrete set of points, we will have:
+       
+ \begin{equation}
+ \frac{dJ}{d \alpha} = \frac{\partial J}{\partial U} \frac{d U}{d \alpha} + \frac{\partial J}{\partial \alpha} 
+ \end{equation}
+and:
+  \begin{equation}
+ \frac{\partial R}{\partial U} \frac{d U}{d \alpha} + \frac{\partial R}{\partial \alpha} = 0
+ \end{equation}
+ 
+ replacing $\frac{d U}{d \alpha}$ from the second equation into the first equation leads to:
+  \begin{equation}
+      \label{disadj}
+ \frac{dJ}{d \alpha} = - \frac{\partial J}{\partial U} (\frac{\partial R}{\partial U})^{-1} \frac{\partial R}{\partial \alpha}  
++ \frac{\partial J}{\partial \alpha}
+ \end{equation} 
+
+   Previous equation shows that we can compute the sensitivity in two different ways:
+   \begin{enumerate}
+    \item Forward mode: first computes $(\frac{\partial R}{\partial U})^{-1} \frac{\partial R}{\partial \alpha}$
+    \item Adjoint mode: first computes $\frac{\partial J}{\partial U} (\frac{\partial R}{\partial U})^{-1}$
+   \end{enumerate}
+     In the adjoint mode the gradient of functional is obtained by a forward solution of $U$, and one backward solution for 
+     the adjoint, and it is independent from $\alpha$. Thus if the number of design parameters be greater than the number of 
+     objective functions, then the computational cost of the adjoint method is much lower than the forward method.   
+To connect the above formulation with the adjoint concept, we can write:
+   \begin{equation}
+    \begin{aligned}
+  u&= \frac{d U}{d \alpha}, \hspace{.3 in} A&=\ \frac{\partial R}{\partial U} 
+ \\ g^T&= \frac{\partial J}{\partial U},  \hspace{.3 in} f&=-\frac{\partial R}{\partial \alpha}
+ \end{aligned}
+   \end{equation}
+
+%    \begin{columns}
+% \begin{column}{.48\textwidth}
+   Forward method:
+   \begin{equation}
+   \label{disadj1}
+      \begin{aligned}
+  \frac{dJ}{d \alpha} = g^T u + \frac{\partial J}{\partial \alpha} \\
+   \text{Subject to} \hspace{.15 in} Au = f
+     \end{aligned}
+  \end{equation}
+
+
+% \end{column}%
+
+% \begin{column}{.48\textwidth}
+  Adjoint Method:
+  
+  \begin{equation}
+   \label{disadj2}
+      \begin{aligned}
+  \frac{dJ}{d \alpha} = v^T f + \frac{\partial J}{\partial \alpha} \\
+   \text{Subject to} \hspace{.15 in} A^T v = g
+     \end{aligned}
+ \end{equation}
+
+% \end{column}%
+% \end{columns}
+ From the above we can see $<Au,v>=<u,A^Tv>$  
+  ,where $v$ is the adjoint vector and is the solution of the following system of equations:
+  
+  \begin{equation}\label{adjoint}
+   (\frac{\partial R}{\partial U})^T v = (\frac{\partial J}{\partial U})^T
+  \end{equation}
+
+\section{Adjoint Computation}
+ As shown in equation \ref{adjoint} the adjoint equation is:
+\begin{equation*}
+   (\frac{\partial R}{\partial U})^T v = (\frac{\partial J}{\partial U})^T
+  \end{equation*}
+  
+  TITAN2D solves hyperbolic system of equations of Savege\_Hutter, using Godunov scheme finite volume with HLL solver to compute the flux terms.
+The discritized form of the equations can be writen:
+  \begin{equation}
+   \label{explicit}
+   U_i^{n+1} = U_i^n - \frac{\bigtriangleup t}{\bigtriangleup x} \{F_{i+\frac{1}{2}}^n - F_{i-\frac{1}{2}}^n \}
+   - \frac{\bigtriangleup t}{\bigtriangleup y} \{G_{i+\frac{1}{2}}^n - G_{i-\frac{1}{2}}^n \}
+  \end{equation}
+  \begin{equation*}
+     (\frac{\partial R}{\partial U})_{m \times m}^T = K_{ij} \hspace{.2 in}
+     \text{which m is the number of time steps}
+  \end{equation*} 
+  every  $K_{ij}$ is also a $n \times n$ matrix, which n is the number of elements.
+For the Godunov method:
+      \begin{equation*}
+        K_{i,i} = I \hspace{.15 in} \text{and} \hspace{.15 in} K_{i,i+1}= (\frac{\partial R_p^{i+1}}{\partial U_q^i})^T 
+        \hspace{.15 in} \& \hspace{.15 in}  \text{rest the of elements $=0$}
+    \end{equation*} 
+The 2nd term is the sensitivity of the residual vector in time step (i+1) 
+with respect to the state variables in time step i, 
+that has to be evaluated at element p with respect to element q, consequently:
+
+\begin{equation}
+   (\frac{\partial R}{\partial U})_{m \times m}^T =
+   \begin{pmatrix}
+  I & K_{1,2}        &         &               &          \\
+    & I              & K_{2,3} & \text{\huge0} &          \\
+    &                & \ddots  & \ddots        &          \\
+    & \text{\huge0}  &         & I             & K_{m-1,m}\\
+    &                &         &               & I
+ \end{pmatrix}
+  \end{equation}  
+Taking to account that in numerical methods the solution at each point only depends on the neighbor points so every $K_{i,i+1}$
+is also a block banded matrix. We used first order derivative so the state variables in each elements only depends on its neighbors.
+
+\begin{equation}
+  \begin{aligned}
+ v_1 + K_{1,2} v_2 &=\left(\frac{\partial J}{\partial U}\right)_1^T \\
+ &\vdots\\
+ v_{m-1} + K_{m-1,m} v_m &=\left(\frac{\partial J}{\partial U}\right)_{m-1}^T \\
+v_m &=\left(\frac{\partial J}{\partial U}\right)_m^T
+ \end{aligned}
+\end{equation}
+The previous equation means that to compute the Jacobian matrices, the solution vectors for all of the elements and for all of time steps 
+ have to be stored. Then we can compute the adjoint in a reverse time order.
+ Since it is impossible to store all of these matrices in the memory, people use dynamic check pointing schemes 
+ and appropriate parallel I/O to overcome these difficulties.
+
+\section{Computer Programing}
+For sake of simplicity and for the first phase We implemented the above computations without Adaptive Mesh Refinement (AMR). 
+To store the solutions we created Jacobian class that stores the all required information including the vector of solutions.
+We also created a vector in Element class that keeps the address of Jacobian class. So Jacobian class is created at each time step for each element, 
+stores the solution vector and its address is maintained in the corrspounding element. The reason that we did not used the same element class for storing 
+the data is that in forward run we do not need the solutions and if we do that we have to pay a huge not necessary comunication cost. 
+With this method at the end of forward run we have the address of all the data that we need to compute the adjoint, and we just have 
+to retrive them from the memory to compute the jacobian. In the reverse mode, after using the required data of the jacobian class we will not need them anymore 
+and we can free memory from them.
+     
+
+\end{document}          
